@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SRK Rate Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app" class="app">
+  <header class="topbar">
+    <h1>SRK Rate Studio <span class="v">v0.1</span></h1>
+    <div class="tabs">
+      <button :class="{active: tab==='templates'}" @click="tab='templates'">Templates</button>
+      <button :class="{active: tab==='build'}"     @click="tab='build'">Build Job</button>
+      <button :class="{active: tab==='pending'}"   @click="tab='pending'">Pending Jobs <span v-if="pending.length" class="badge">{{ pending.length }}</span></button>
+    </div>
+    <div class="spacer"></div>
+    <div class="bridge-status" :class="{live: bridgeLive}" :title="bridgeLive ? 'Mega-script bridge detected' : 'No bridge — open this page in a Chrome window where Tampermonkey has the SRK mega-script installed and matched.'">
+      <span class="dot"></span>
+      <span>{{ bridgeLive ? 'Bridge: live' : 'Bridge: not detected' }}</span>
+    </div>
+  </header>
+
+  <main class="main">
+
+    <!-- ============================================================ -->
+    <!--  TEMPLATES TAB                                                -->
+    <!-- ============================================================ -->
+    <section v-if="tab==='templates'">
+      <div class="row" style="margin-bottom: 12px;">
+        <button class="btn" @click="newTemplate">+ New template</button>
+        <button class="btn alt" @click="selected && duplicateTemplate(selected.id)" :disabled="!selected">Duplicate</button>
+        <button class="btn alt" @click="exportAll">Export all</button>
+        <button class="btn alt" @click="showImport = !showImport">{{ showImport ? 'Cancel import' : 'Import…' }}</button>
+        <button class="btn alt" @click="resetDefaults" style="margin-left: auto;">Reset to factory</button>
+      </div>
+
+      <div v-if="showImport" class="panel" style="margin-bottom: 16px;">
+        <h3>Paste templates JSON</h3>
+        <textarea v-model="importText" rows="6" style="width:100%" placeholder='[{ "id":"my-tpl", ... }]'></textarea>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn" @click="doImport">Import</button>
+        </div>
+      </div>
+
+      <div class="split">
+        <!-- LIST -->
+        <div class="tlist">
+          <div v-if="!templates.length" class="empty"><div class="big">∅</div>No templates.</div>
+          <div v-for="t in templates" :key="t.id"
+               class="item" :class="{active: t.id === selectedId}"
+               @click="selectTemplate(t.id)">
+            <div>{{ t.name }}</div>
+            <div class="meta">
+              <span class="badge master">{{ t.master }}</span>
+              <span class="badge rl">{{ t.rateListType || '*' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- DETAIL / EDITOR -->
+        <div>
+          <!-- View mode -->
+          <div v-if="selected && editingId !== selected.id" class="panel">
+            <div class="row" style="justify-content: space-between;">
+              <h2 style="margin:0;">{{ selected.name }}</h2>
+              <div class="row">
+                <button class="btn alt sm" @click="startEdit">Edit</button>
+                <button class="btn danger sm" @click="deleteTemplate(selected.id)">Delete</button>
+              </div>
+            </div>
+            <div class="row" style="margin-top:8px;">
+              <span class="badge master">Master: {{ selected.master }}</span>
+              <span class="badge rl">Rate List: {{ selected.rateListType || '*' }}</span>
+              <span class="badge">Pkg Type: {{ selected.packageType || 'IPD' }}</span>
+            </div>
+
+            <h3>Inputs</h3>
+            <table>
+              <thead><tr><th>Key</th><th>Label</th><th>Type</th><th>Required</th><th>Options</th></tr></thead>
+              <tbody>
+                <tr v-for="i in selected.inputs" :key="i.key">
+                  <td><code>{{ i.key }}</code></td>
+                  <td>{{ i.label }}</td>
+                  <td>{{ i.type }}</td>
+                  <td>{{ i.required ? 'yes' : 'no' }}</td>
+                  <td>{{ i.options ? i.options.join(' / ') : '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3 v-if="selected.fixed && selected.fixed.length">Fixed components</h3>
+            <table v-if="selected.fixed && selected.fixed.length">
+              <thead><tr><th>Component</th><th class="num">Rate</th></tr></thead>
+              <tbody>
+                <tr v-for="f in selected.fixed" :key="f.component">
+                  <td>{{ f.component }}</td>
+                  <td class="num">{{ f.rate }}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3 v-if="selected.formulas && selected.formulas.length">Formulas</h3>
+            <table v-if="selected.formulas && selected.formulas.length">
+              <thead><tr><th>Component</th><th>Expression</th></tr></thead>
+              <tbody>
+                <tr v-for="f in selected.formulas" :key="f.component">
+                  <td>{{ f.component === '__PACKAGE_NAME__' ? '(uses Package Name)' : f.component }}</td>
+                  <td><code>{{ f.expr }}</code></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3 v-if="selected.extras && selected.extras.length">Optional extras</h3>
+            <table v-if="selected.extras && selected.extras.length">
+              <thead><tr><th>When input is truthy</th><th>Component name from</th><th>Rate from</th></tr></thead>
+              <tbody>
+                <tr v-for="e in selected.extras" :key="e.whenInputTruthy">
+                  <td><code>{{ e.whenInputTruthy }}</code></td>
+                  <td><code>{{ e.componentInputKey }}</code></td>
+                  <td><code>{{ e.rateInputKey }}</code></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3 v-if="selected.derived && selected.derived.length">Derived (display only)</h3>
+            <table v-if="selected.derived && selected.derived.length">
+              <thead><tr><th>Key</th><th>Label</th><th>Expression</th></tr></thead>
+              <tbody>
+                <tr v-for="d in selected.derived" :key="d.key">
+                  <td><code>{{ d.key }}</code></td>
+                  <td>{{ d.label }}</td>
+                  <td><code>{{ d.expr }}</code></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3 v-if="selected.validate">Validation</h3>
+            <div v-if="selected.validate">
+              <code>{{ selected.validate }}</code>
+              <div class="muted" style="margin-top:4px; font-size:12px;">{{ selected.validateMsg }}</div>
+            </div>
+          </div>
+
+          <!-- Edit mode -->
+          <div v-else-if="editingDraft" class="panel">
+            <h2 style="margin-top:0;">Edit template</h2>
+            <label class="field"><span>Name</span><input type="text" v-model="editingDraft.name" /></label>
+
+            <div class="row">
+              <label class="field" style="flex:1;"><span>Master</span>
+                <select v-model="editingDraft.master">
+                  <option value="package">Package Master</option>
+                  <option value="rateList">Rate List Master</option>
+                </select>
+              </label>
+              <label class="field" style="flex:1;"><span>Rate List Type (use * for "user picks per row")</span>
+                <input type="text" v-model="editingDraft.rateListType" placeholder="HOSPITAL, TPA, *" />
+              </label>
+              <label class="field" style="flex:0 0 120px;"><span>Pkg Type</span>
+                <input type="text" v-model="editingDraft.packageType" placeholder="IPD" />
+              </label>
+            </div>
+
+            <h3>Inputs</h3>
+            <div class="help">
+              <code>key</code> is the variable name used in formulas (lowercase, no spaces).
+              <code>label</code> is what the user sees and what the CSV header should match.
+            </div>
+            <div v-for="(i, idx) in editingDraft.inputs" :key="idx" class="rule-row" style="grid-template-columns: 1fr 1.5fr 1fr 80px 60px;">
+              <input type="text" v-model="i.key" placeholder="key (e.g. total)" />
+              <input type="text" v-model="i.label" placeholder="Label (e.g. Total Amount)" />
+              <select v-model="i.type">
+                <option value="number">number</option>
+                <option value="text">text</option>
+                <option value="select">select</option>
+              </select>
+              <label style="font-size:12px;"><input type="checkbox" v-model="i.required" /> req'd</label>
+              <button class="x" @click="removeInput(idx)" title="Remove">×</button>
+            </div>
+            <div v-for="(i, idx) in editingDraft.inputs.filter(x=>x.type==='select')" :key="'opt-'+idx">
+              <label class="field"><span>Options for "{{ i.label }}" (comma-separated numbers)</span>
+                <input type="text" :value="(i.options||[]).join(',')"
+                       @input="i.options = $event.target.value.split(',').map(s => Number(s.trim())).filter(n => !isNaN(n))" />
+              </label>
+            </div>
+            <button class="btn alt sm" @click="addInput">+ input</button>
+
+            <h3>Fixed components</h3>
+            <div v-for="(f, idx) in editingDraft.fixed" :key="'f-'+idx" class="rule-row">
+              <input type="text" v-model="f.component" placeholder="Component name (e.g. Phaco Charges)" />
+              <input type="number" v-model.number="f.rate" placeholder="Rate" />
+              <button class="x" @click="removeFixed(idx)">×</button>
+            </div>
+            <button class="btn alt sm" @click="addFixed">+ fixed component</button>
+
+            <h3>Formulas</h3>
+            <div class="help">
+              JS expression using input keys. Use <code>__PACKAGE_NAME__</code> as Component to make the component named after the row's Package Name.
+              Example: <code>(total - lens - 5100) * 0.7</code>
+            </div>
+            <div v-for="(f, idx) in editingDraft.formulas" :key="'fm-'+idx" class="rule-row formula-row">
+              <input type="text" v-model="f.component" placeholder="Component name or __PACKAGE_NAME__" />
+              <input type="text" v-model="f.expr" placeholder="Expression" />
+              <button class="x" @click="removeFormula(idx)">×</button>
+            </div>
+            <button class="btn alt sm" @click="addFormula">+ formula</button>
+
+            <h3>Optional extras</h3>
+            <div class="help">If the input named in "when truthy" is filled, add a component using the named inputs as the component name and rate.</div>
+            <div v-for="(e, idx) in (editingDraft.extras || [])" :key="'ex-'+idx" class="rule-row" style="grid-template-columns: 1fr 1fr 1fr 60px;">
+              <input type="text" v-model="e.whenInputTruthy"   placeholder="when input key" />
+              <input type="text" v-model="e.componentInputKey" placeholder="component name from input key" />
+              <input type="text" v-model="e.rateInputKey"      placeholder="rate from input key" />
+              <button class="x" @click="removeExtra(idx)">×</button>
+            </div>
+            <button class="btn alt sm" @click="addExtra">+ extra</button>
+
+            <h3>Derived (display-only sanity checks)</h3>
+            <div v-for="(d, idx) in (editingDraft.derived || [])" :key="'dv-'+idx" class="rule-row" style="grid-template-columns: 1fr 1fr 2fr 60px;">
+              <input type="text" v-model="d.key"   placeholder="key (e.g. total)" />
+              <input type="text" v-model="d.label" placeholder="Label" />
+              <input type="text" v-model="d.expr"  placeholder="Expression" />
+              <button class="x" @click="removeDerived(idx)">×</button>
+            </div>
+            <button class="btn alt sm" @click="addDerived">+ derived</button>
+
+            <h3>Validation</h3>
+            <label class="field"><span>Expression (must return truthy)</span>
+              <input type="text" v-model="editingDraft.validate" placeholder="e.g. total > lens + 5100" />
+            </label>
+            <label class="field"><span>Error message</span>
+              <input type="text" v-model="editingDraft.validateMsg" />
+            </label>
+
+            <div class="sticky-actions">
+              <button class="btn alt" @click="cancelEdit">Cancel</button>
+              <button class="btn good" @click="saveEdit">Save</button>
+            </div>
+          </div>
+
+          <div v-else class="empty"><div class="big">←</div>Pick a template, or click + New template.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!--  BUILD JOB TAB                                                -->
+    <!-- ============================================================ -->
+    <section v-if="tab==='build'">
+      <div class="panel">
+        <div class="row">
+          <label class="field" style="flex:1;">
+            <span>Template</span>
+            <select v-model="jobTemplateId">
+              <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }} ({{ t.rateListType || '*' }})</option>
+            </select>
+          </label>
+          <label class="field" style="flex:0 0 200px;">
+            <span>Action</span>
+            <select v-model="action">
+              <option value="add">Add</option>
+              <option value="update">Update</option>
+              <option value="delete">Delete (Package Name only)</option>
+            </select>
+          </label>
+        </div>
+
+        <div v-if="jobTemplate" class="help">
+          This template expects these input columns in your CSV (header order doesn't matter; case + spaces are normalized):
+          <strong>{{ jobTemplate.inputs.map(i => i.label).join(', ') }}</strong>
+        </div>
+
+        <div class="row" style="margin-top:8px;">
+          <button class="btn alt sm" @click="downloadCsvTemplate" :disabled="!jobTemplate">⬇ Download CSV template</button>
+          <label class="btn alt sm" style="cursor:pointer;">
+            ⬆ Upload CSV file
+            <input type="file" accept=".csv,text/csv" @change="loadCsvFile" style="display:none;" />
+          </label>
+          <button class="btn sm" @click="computeAll" :disabled="!jobTemplate">↻ Recompute</button>
+        </div>
+
+        <label class="field" style="margin-top:8px;">
+          <span>Or paste CSV directly</span>
+          <textarea v-model="csvText" rows="6" @blur="computeAll" placeholder="Package Name,Total Amount,Lens Amount&#10;LENTIS Cataract A,40000,30000"></textarea>
+        </label>
+      </div>
+
+      <div class="panel">
+        <div class="row" style="justify-content: space-between;">
+          <h2 style="margin:0;">Preview <span class="muted" style="font-weight:400; font-size:13px;">— {{ okCount }} ok, {{ errCount }} error</span></h2>
+          <button class="btn good" @click="ship" :disabled="!okCount">Ship to portal ({{ okCount }} rows)</button>
+        </div>
+
+        <div v-if="!computedRows.length" class="empty"><div class="big">∼</div>Upload or paste CSV to see preview.</div>
+
+        <div v-else>
+          <div v-for="(r, idx) in computedRows" :key="idx" class="panel" style="background: var(--panel-2); margin-top: 12px;">
+            <div class="row" style="justify-content: space-between;">
+              <div>
+                <strong>{{ r.inputRow.packageName || '(no name)' }}</strong>
+                <span v-if="r.ok" class="badge action-add" style="margin-left:8px;">OK</span>
+                <span v-else class="badge action-delete" style="margin-left:8px;">ERROR</span>
+              </div>
+              <div class="muted" style="font-size:12px;">row {{ idx + 1 }}</div>
+            </div>
+            <div v-if="!r.ok" class="bad-text" style="margin-top:6px; font-size:12px;">{{ r.error }}</div>
+            <div v-else>
+              <table style="margin-top:8px;">
+                <thead><tr><th>Component</th><th class="num">Rate</th></tr></thead>
+                <tbody>
+                  <tr v-for="c in r.components" :key="c.Component">
+                    <td>{{ c.Component }}</td>
+                    <td class="num">{{ c.Rate.toLocaleString() }}</td>
+                  </tr>
+                  <tr v-if="r.derived && Object.keys(r.derived).length" style="opacity:0.7;">
+                    <td colspan="2" style="font-size:11px; padding-top:6px;">
+                      Derived:
+                      <span v-for="(v, k) in r.derived" :key="k">{{ k }} = {{ v?.toLocaleString?.() ?? v }} &nbsp;</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <label class="field" style="margin-top: 12px;">
+          <span>Job note (optional, helps you find it in Pending)</span>
+          <input type="text" v-model="jobNote" placeholder="e.g. April rate revision" />
+        </label>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!--  PENDING TAB                                                  -->
+    <!-- ============================================================ -->
+    <section v-if="tab==='pending'">
+      <div class="panel">
+        <div class="row" style="justify-content: space-between;">
+          <h2 style="margin:0;">Pending jobs <span class="muted" style="font-weight:400;font-size:13px;">— shipped from this Studio, awaiting portal pickup</span></h2>
+          <button class="btn alt sm" @click="clearAllPending" :disabled="!pending.length">Clear all</button>
+        </div>
+        <div v-if="!pending.length" class="empty"><div class="big">✓</div>No pending jobs.</div>
+        <div v-for="j in pending" :key="j.id" class="panel" style="background: var(--panel-2); margin-top: 12px;">
+          <div class="row" style="justify-content: space-between;">
+            <div>
+              <strong>{{ j.templateName }}</strong>
+              <span class="badge" :class="'action-'+j.action" style="margin-left:8px;">{{ j.action }}</span>
+              <span class="muted" style="margin-left:8px;font-size:12px;">{{ new Date(j.createdAt).toLocaleString() }}</span>
+            </div>
+            <div class="row">
+              <button class="btn alt sm" @click="copyJobJson(j)">Copy JSON</button>
+              <button class="btn danger sm" @click="deleteJob(j.id)">Delete</button>
+            </div>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">
+            {{ j.rowCount }} package{{ j.rowCount===1?'':'s' }} · {{ j.itemCount }} portal item{{ j.itemCount===1?'':'s' }}
+            <span v-if="j.note"> · "{{ j.note }}"</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="templates.js"></script>
+<script src="compute.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
