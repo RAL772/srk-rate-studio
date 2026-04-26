@@ -40,9 +40,14 @@ createApp({
     const rlPageSize = 100;
     const rlNewRow = ref(null);       // dialog state for adding a row
     const rlSyncBusy = ref(false);
+    // Version counter — bump on any mutation so computed properties (rlDiff, rlPendingCount)
+    // re-run. SRKRateList.diff() reads localStorage directly so Vue can't track it via deps.
+    const rlVersion = ref(0);
+    const bumpRl = () => { rlVersion.value++; };
 
     function reloadRl() {
       rlWorking.value = SRKRateList.loadWorking();
+      bumpRl();
     }
 
     async function rlImportFromRepo() {
@@ -90,14 +95,13 @@ createApp({
     const rlPageCount = computed(() => Math.max(1, Math.ceil(rlFiltered.value.length / rlPageSize)));
 
     function rlEditCell(row, field, value) {
-      // Find index in working.rows by reference identity is fragile — match by _key or (CODE, _RATE_LIST_TYPE).
       const all = rlWorking.value.rows;
       const idx = all.findIndex(r => r === row);
       if (idx < 0) return;
       const patch = { [field]: field === 'AMOUNT' ? Number(value) : value };
       SRKRateList.updateRow(idx, patch);
-      // Also patch local copy so reactivity sees it.
       Object.assign(all[idx], patch);
+      bumpRl();
     }
 
     function rlDeleteRow(row) {
@@ -125,7 +129,11 @@ createApp({
       reloadRl();
     }
 
-    const rlDiff = computed(() => SRKRateList.diff());
+    const rlDiff = computed(() => {
+      void rlVersion.value;        // tracks mutations
+      void rlWorking.value.rows;   // tracks ref reassignment
+      return SRKRateList.diff();
+    });
     const rlPendingCount = computed(() => {
       const d = rlDiff.value;
       return d.adds.length + d.updates.length + d.deletes.length;
