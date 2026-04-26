@@ -13,6 +13,7 @@
     <div class="tabs">
       <button :class="{active: tab==='templates'}" @click="tab='templates'">Templates</button>
       <button :class="{active: tab==='build'}"     @click="tab='build'">Build Job</button>
+      <button :class="{active: tab==='ratelist'}"  @click="tab='ratelist'">Rate List <span v-if="rlPendingCount" class="badge">{{ rlPendingCount }}</span></button>
       <button :class="{active: tab==='pending'}"   @click="tab='pending'">Pending Jobs <span v-if="pending.length" class="badge">{{ pending.length }}</span></button>
     </div>
     <div class="spacer"></div>
@@ -334,6 +335,161 @@
     </section>
 
     <!-- ============================================================ -->
+    <!--  RATE LIST TAB                                                -->
+    <!-- ============================================================ -->
+    <section v-if="tab==='ratelist'">
+      <div v-if="!rlImported" class="panel">
+        <h2 style="margin-top:0;">Import Rate List Snapshot</h2>
+        <p class="muted">Studio is the source of truth for rate edits. Import the current portal state once; thereafter edit here and ship changes back via the mega-script. Re-import only when you've made changes directly on the portal.</p>
+        <div class="row">
+          <button class="btn good" @click="rlImportFromRepo">Import from repo (rate-list-snapshot.json)</button>
+          <label class="btn alt" style="cursor:pointer;">Upload JSON file
+            <input type="file" accept=".json,application/json" @change="rlImportFromFile" style="display:none;" />
+          </label>
+        </div>
+      </div>
+
+      <template v-else>
+        <div class="panel">
+          <div class="row" style="justify-content:space-between;">
+            <h2 style="margin:0;">Rate List Master <span class="muted" style="font-size:13px;font-weight:400;">— {{ rlAllRows.length }} rates ({{ rlFiltered.length }} match filter)</span></h2>
+            <div class="row">
+              <button class="btn alt sm" @click="rlBeginAdd">+ Add rate</button>
+              <button class="btn alt sm" @click="rlImportFromRepo" title="Re-import from repo (clears edits)">↻ Re-import</button>
+            </div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="field" style="flex:1;"><span>Search (CODE or NAME)</span>
+              <input type="text" v-model="rlSearch" @input="rlPage = 0" placeholder="REL05024 or Cataract..." />
+            </label>
+            <label class="field" style="flex:0 0 220px;"><span>Filter by Rate List Type</span>
+              <select v-model="rlFilterType" @change="rlPage = 0">
+                <option value="">All ({{ rlAllRows.length }})</option>
+                <option v-for="t in rlTypes" :key="t" :value="t">{{ t }}</option>
+              </select>
+            </label>
+          </div>
+
+          <div v-if="rlNewRow" class="panel" style="background:var(--panel-2);margin-top:12px;">
+            <h3>New rate</h3>
+            <div class="row">
+              <label class="field" style="flex:1;"><span>Rate List Type</span>
+                <select v-model="rlNewRow._RATE_LIST_TYPE">
+                  <option v-for="t in rlTypes" :key="t" :value="t">{{ t }}</option>
+                </select>
+              </label>
+              <label class="field" style="flex:1;"><span>CODE</span><input type="text" v-model="rlNewRow.CODE" placeholder="leave blank to auto-assign" /></label>
+              <label class="field" style="flex:1;"><span>CATEGORY</span><input type="text" v-model="rlNewRow.CATEGORY" /></label>
+            </div>
+            <div class="row">
+              <label class="field" style="flex:1;"><span>TYPE</span><input type="text" v-model="rlNewRow.TYPE" /></label>
+              <label class="field" style="flex:1;"><span>DEPARTMENT</span><input type="text" v-model="rlNewRow.DEPARTMENT" /></label>
+              <label class="field" style="flex:0 0 120px;"><span>AMOUNT</span><input type="number" v-model.number="rlNewRow.AMOUNT" /></label>
+            </div>
+            <label class="field"><span>NAME</span><input type="text" v-model="rlNewRow.NAME" /></label>
+            <div class="row" style="justify-content:flex-end;">
+              <button class="btn alt" @click="rlCancelAdd">Cancel</button>
+              <button class="btn good" @click="rlConfirmAdd">Add</button>
+            </div>
+          </div>
+
+          <table style="margin-top:12px;">
+            <thead>
+              <tr>
+                <th>RL Type</th>
+                <th>CODE</th>
+                <th>CATEGORY</th>
+                <th>DEPARTMENT</th>
+                <th>NAME</th>
+                <th class="num">AMOUNT</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in rlPageRows" :key="(r._key || r.ID || r.CODE) + '-' + r._RATE_LIST_TYPE">
+                <td><span class="badge rl">{{ r._RATE_LIST_TYPE }}</span></td>
+                <td><code>{{ r.CODE || '(new)' }}</code></td>
+                <td>{{ r.CATEGORY }}</td>
+                <td>{{ r.DEPARTMENT }}</td>
+                <td><input type="text" :value="r.NAME" @change="rlEditCell(r, 'NAME', $event.target.value)" style="width: 100%; background: transparent; border: 1px solid transparent; padding: 2px 4px;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td class="num"><input type="number" :value="r.AMOUNT" @change="rlEditCell(r, 'AMOUNT', $event.target.value)" style="width: 100px; background: transparent; border: 1px solid transparent; padding: 2px 4px; text-align: right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td><button class="x" @click="rlDeleteRow(r)" title="Mark for deletion">×</button></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="row" style="margin-top:12px;justify-content:space-between;">
+            <span class="muted">Page {{ rlPage + 1 }} / {{ rlPageCount }}</span>
+            <div class="row">
+              <button class="btn alt sm" @click="rlPage = Math.max(0, rlPage - 1)" :disabled="rlPage === 0">← Prev</button>
+              <button class="btn alt sm" @click="rlPage = Math.min(rlPageCount - 1, rlPage + 1)" :disabled="rlPage >= rlPageCount - 1">Next →</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" v-if="rlPendingCount">
+          <div class="row" style="justify-content:space-between;">
+            <h2 style="margin:0;">Pending changes <span class="muted" style="font-size:13px;font-weight:400;">— {{ rlDiff.adds.length }} add · {{ rlDiff.updates.length }} update · {{ rlDiff.deletes.length }} delete</span></h2>
+            <div class="row">
+              <button class="btn good" @click="rlShipPending">▶ Ship to portal ({{ rlPendingCount }} ops)</button>
+              <button class="btn alt sm" @click="rlMarkSynced" title="Promote working set to baseline (use AFTER successful sync)">✓ Mark synced</button>
+            </div>
+          </div>
+          <div v-if="rlDiff.updates.length" style="margin-top:12px;">
+            <h3>Updates</h3>
+            <table>
+              <thead><tr><th>RL Type</th><th>CODE</th><th>NAME (was → now)</th><th class="num">AMOUNT (was → now)</th></tr></thead>
+              <tbody>
+                <tr v-for="u in rlDiff.updates" :key="u.CODE + u._RATE_LIST_TYPE">
+                  <td><span class="badge rl">{{ u._RATE_LIST_TYPE }}</span></td>
+                  <td><code>{{ u.CODE }}</code></td>
+                  <td>
+                    <span v-if="u._was.NAME !== u.NAME"><span class="muted">"{{ u._was.NAME }}"</span> → <strong>"{{ u.NAME }}"</strong></span>
+                    <span v-else class="muted">(no change)</span>
+                  </td>
+                  <td class="num">
+                    <span v-if="Number(u._was.AMOUNT) !== Number(u.AMOUNT)"><span class="muted">{{ u._was.AMOUNT }}</span> → <strong>{{ u.AMOUNT }}</strong></span>
+                    <span v-else class="muted">{{ u.AMOUNT }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="rlDiff.adds.length" style="margin-top:12px;">
+            <h3>Adds</h3>
+            <table>
+              <thead><tr><th>RL Type</th><th>CODE</th><th>CATEGORY</th><th>DEPT</th><th>NAME</th><th class="num">AMOUNT</th></tr></thead>
+              <tbody>
+                <tr v-for="a in rlDiff.adds" :key="a._key">
+                  <td><span class="badge rl">{{ a._RATE_LIST_TYPE }}</span></td>
+                  <td><code>{{ a.CODE || '(auto)' }}</code></td>
+                  <td>{{ a.CATEGORY }}</td>
+                  <td>{{ a.DEPARTMENT }}</td>
+                  <td>{{ a.NAME }}</td>
+                  <td class="num">{{ a.AMOUNT }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="rlDiff.deletes.length" style="margin-top:12px;">
+            <h3>Deletes</h3>
+            <table>
+              <thead><tr><th>RL Type</th><th>CODE</th><th>NAME</th><th class="num">AMOUNT</th></tr></thead>
+              <tbody>
+                <tr v-for="d in rlDiff.deletes" :key="d.CODE + d._RATE_LIST_TYPE">
+                  <td><span class="badge rl">{{ d._RATE_LIST_TYPE }}</span></td>
+                  <td><code>{{ d.CODE }}</code></td>
+                  <td>{{ d.NAME }}</td>
+                  <td class="num">{{ d.AMOUNT }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ============================================================ -->
     <!--  PENDING TAB                                                  -->
     <!-- ============================================================ -->
     <section v-if="tab==='pending'">
@@ -369,6 +525,7 @@
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="templates.js"></script>
 <script src="compute.js"></script>
+<script src="ratelist.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

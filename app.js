@@ -31,6 +31,132 @@ createApp({
     // Pending jobs
     const pending = ref(loadPending());
 
+    // ---------- Rate List Master state ----------
+    const rlImported = ref(SRKRateList.isImported());
+    const rlWorking = ref(SRKRateList.loadWorking());
+    const rlFilterType = ref('');     // rate list type filter
+    const rlSearch = ref('');         // text search across CODE / NAME
+    const rlPage = ref(0);            // pagination
+    const rlPageSize = 100;
+    const rlNewRow = ref(null);       // dialog state for adding a row
+    const rlSyncBusy = ref(false);
+
+    function reloadRl() {
+      rlWorking.value = SRKRateList.loadWorking();
+    }
+
+    async function rlImportFromRepo() {
+      if (rlImported.value && !confirm('Re-importing will discard any pending edits. Continue?')) return;
+      try {
+        const snap = await SRKRateList.fetchSnapshot();
+        SRKRateList.importSnapshot(snap);
+        rlImported.value = true;
+        reloadRl();
+        alert(`Imported ${snap.totalRows || (snap.rows || []).length} rates.`);
+      } catch (e) { alert('Import failed: ' + e.message); }
+    }
+
+    function rlImportFromFile(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        try {
+          const snap = JSON.parse(r.result);
+          SRKRateList.importSnapshot(snap);
+          rlImported.value = true;
+          reloadRl();
+          alert(`Imported ${(snap.rows || []).length} rates.`);
+        } catch (e) { alert('Bad JSON: ' + e.message); }
+      };
+      r.readAsText(f);
+    }
+
+    const rlTypes = computed(() => SRKRateList.rateListTypes());
+    const rlAllRows = computed(() => rlWorking.value.rows || []);
+    const rlFiltered = computed(() => {
+      const s = rlSearch.value.trim().toLowerCase();
+      const t = rlFilterType.value;
+      return rlAllRows.value.filter(r => {
+        if (t && r._RATE_LIST_TYPE !== t) return false;
+        if (s && !((r.CODE || '').toLowerCase().includes(s) || (r.NAME || '').toLowerCase().includes(s))) return false;
+        return true;
+      });
+    });
+    const rlPageRows = computed(() => {
+      const start = rlPage.value * rlPageSize;
+      return rlFiltered.value.slice(start, start + rlPageSize);
+    });
+    const rlPageCount = computed(() => Math.max(1, Math.ceil(rlFiltered.value.length / rlPageSize)));
+
+    function rlEditCell(row, field, value) {
+      // Find index in working.rows by reference identity is fragile — match by _key or (CODE, _RATE_LIST_TYPE).
+      const all = rlWorking.value.rows;
+      const idx = all.findIndex(r => r === row);
+      if (idx < 0) return;
+      const patch = { [field]: field === 'AMOUNT' ? Number(value) : value };
+      SRKRateList.updateRow(idx, patch);
+      // Also patch local copy so reactivity sees it.
+      Object.assign(all[idx], patch);
+    }
+
+    function rlDeleteRow(row) {
+      if (!confirm(`Mark "${row.NAME || row.CODE}" for deletion?`)) return;
+      const idx = rlWorking.value.rows.findIndex(r => r === row);
+      if (idx < 0) return;
+      SRKRateList.deleteRow(idx);
+      reloadRl();
+    }
+
+    function rlBeginAdd() {
+      rlNewRow.value = {
+        CODE: '', CATEGORY: '', TYPE: '', DEPARTMENT: '',
+        NAME: '', AMOUNT: 0, AS_FOR_HOSPITAL: '', SERIAL_NO: '',
+        _RATE_LIST_TYPE: rlFilterType.value || '',
+      };
+    }
+    function rlCancelAdd() { rlNewRow.value = null; }
+    function rlConfirmAdd() {
+      const r = rlNewRow.value;
+      if (!r) return;
+      if (!r.NAME || !r._RATE_LIST_TYPE) { alert('NAME and Rate List Type required.'); return; }
+      SRKRateList.addRow(r);
+      rlNewRow.value = null;
+      reloadRl();
+    }
+
+    const rlDiff = computed(() => SRKRateList.diff());
+    const rlPendingCount = computed(() => {
+      const d = rlDiff.value;
+      return d.adds.length + d.updates.length + d.deletes.length;
+    });
+
+    function rlShipPending() {
+      const d = rlDiff.value;
+      const items = SRKRateList.buildJobItems(d);
+      if (!items.length) { alert('No pending changes.'); return; }
+      const job = {
+        id: 'rljob_' + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
+        createdAt: new Date().toISOString(),
+        templateName: 'Rate List Master sync',
+        action: 'mixed',
+        rowCount: items.length,
+        itemCount: items.length,
+        note: `${d.adds.length} add, ${d.updates.length} update, ${d.deletes.length} delete`,
+        items,
+      };
+      pending.value.unshift(job);
+      window.postMessage({ srkStudio: true, kind: 'jobShipped', job }, '*');
+      tab.value = 'pending';
+      alert(`Shipped Rate List sync: ${items.length} ops. After it completes, click "Mark synced" to promote to baseline.`);
+    }
+
+    function rlMarkSynced() {
+      if (!confirm('Promote current edits to baseline (clears pending diff)?')) return;
+      SRKRateList.markSynced();
+      reloadRl();
+    }
+
     // Bridge live status (set by the mega-script via window.postMessage handshake)
     const bridgeLive = ref(false);
     let bridgePingTimer = 0;
@@ -246,6 +372,13 @@ createApp({
       downloadCsvTemplate, loadCsvFile, ship, jobNote,
       pending, deleteJob, clearAllPending, copyJobJson,
       bridgeLive, pingBridge,
+      // Rate List
+      rlImported, rlWorking, rlFilterType, rlSearch, rlPage, rlPageSize,
+      rlAllRows, rlFiltered, rlPageRows, rlPageCount, rlTypes,
+      rlImportFromRepo, rlImportFromFile,
+      rlEditCell, rlDeleteRow,
+      rlNewRow, rlBeginAdd, rlCancelAdd, rlConfirmAdd,
+      rlDiff, rlPendingCount, rlShipPending, rlMarkSynced, rlSyncBusy,
     };
   },
 }).mount('#app');
