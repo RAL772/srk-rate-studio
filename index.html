@@ -14,6 +14,7 @@
       <button :class="{active: tab==='templates'}" @click="tab='templates'">Templates</button>
       <button :class="{active: tab==='build'}"     @click="tab='build'">Build Job</button>
       <button :class="{active: tab==='ratelist'}"  @click="tab='ratelist'">Rate List <span v-if="rlPendingCount" class="badge">{{ rlPendingCount }}</span></button>
+      <button :class="{active: tab==='packages'}"  @click="tab='packages'">Packages <span v-if="pkPendingCount" class="badge">{{ pkPendingCount }}</span></button>
       <button :class="{active: tab==='pending'}"   @click="tab='pending'">Pending Jobs <span v-if="pending.length" class="badge">{{ pending.length }}</span></button>
     </div>
     <div class="spacer"></div>
@@ -490,6 +491,127 @@
     </section>
 
     <!-- ============================================================ -->
+    <!--  PACKAGE MASTER TAB                                           -->
+    <!-- ============================================================ -->
+    <section v-if="tab==='packages'">
+      <div v-if="!pkImported" class="panel">
+        <h2 style="margin-top:0;">Import Package Master Snapshot</h2>
+        <p class="muted">Each variant is one (package name × rate list type) row. Components from the dump are matched to variants by subset-sum on total amount; about 84% match on first pass with the partial extraction.</p>
+        <div class="row">
+          <button class="btn good" @click="pkImportFromRepo">Import from repo (package-master-snapshot.json)</button>
+          <label class="btn alt" style="cursor:pointer;">Upload JSON file
+            <input type="file" accept=".json,application/json" @change="pkImportFromFile" style="display:none;" />
+          </label>
+        </div>
+      </div>
+
+      <template v-else>
+        <div class="panel">
+          <div class="row" style="justify-content:space-between;">
+            <h2 style="margin:0;">Package Master <span class="muted" style="font-size:13px;font-weight:400;">— {{ pkAllRows.length }} variants ({{ pkFiltered.length }} match filter)</span></h2>
+            <div class="row">
+              <button class="btn alt sm" @click="pkImportFromRepo" title="Re-import from repo">↻ Re-import</button>
+            </div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="field" style="flex:1;"><span>Search (Package Name)</span>
+              <input type="text" v-model="pkSearch" @input="pkPage = 0" placeholder="LENTIS, RAYNER..." />
+            </label>
+            <label class="field" style="flex:0 0 220px;"><span>Filter by Rate List Type</span>
+              <select v-model="pkFilterType" @change="pkPage = 0">
+                <option value="">All ({{ pkAllRows.length }})</option>
+                <option v-for="t in pkTypes" :key="t" :value="t">{{ t }}</option>
+              </select>
+            </label>
+          </div>
+
+          <table style="margin-top:12px;">
+            <thead>
+              <tr>
+                <th></th>
+                <th>RL Type</th>
+                <th>NAME</th>
+                <th class="num">AMOUNT</th>
+                <th>Components</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="r in pkPageRows" :key="r.NAME + '|' + r.RATE_LIST_TYPE">
+                <tr>
+                  <td><button class="btn alt sm" @click="pkToggleExpand(r)" style="padding:0 6px;font-size:14px;">{{ pkIsExpanded(r) ? '▾' : '▸' }}</button></td>
+                  <td><span class="badge rl">{{ r.RATE_LIST_TYPE }}</span></td>
+                  <td>{{ r.NAME }}</td>
+                  <td class="num">{{ Number(r.AMOUNT).toLocaleString() }}</td>
+                  <td><span class="muted" style="font-size:12px;">{{ (r.COMPONENTS || []).length }} components</span></td>
+                  <td><button class="x" @click="pkDeleteRow(r)" title="Mark for deletion">×</button></td>
+                </tr>
+                <tr v-if="pkIsExpanded(r)">
+                  <td colspan="6" style="background: var(--panel-2); padding: 8px 16px;">
+                    <div v-if="!r.COMPONENTS || !r.COMPONENTS.length" class="muted">No components yet (extraction may be incomplete for this variant).</div>
+                    <table v-else>
+                      <thead><tr><th>Component</th><th class="num">Rate</th></tr></thead>
+                      <tbody>
+                        <tr v-for="c in r.COMPONENTS" :key="c.NAME">
+                          <td><input type="text" :value="c.NAME" @change="pkEditComponent(r, c, 'NAME', $event.target.value)" style="width: 100%; background: transparent; border: 1px solid transparent; padding: 2px 4px;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                          <td class="num"><input type="number" :value="c.Rate" @change="pkEditComponent(r, c, 'Rate', $event.target.value)" style="width: 110px; background: transparent; border: 1px solid transparent; padding: 2px 4px; text-align: right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          <div class="row" style="margin-top:12px;justify-content:space-between;">
+            <span class="muted">Page {{ pkPage + 1 }} / {{ pkPageCount }}</span>
+            <div class="row">
+              <button class="btn alt sm" @click="pkPage = Math.max(0, pkPage - 1)" :disabled="pkPage === 0">← Prev</button>
+              <button class="btn alt sm" @click="pkPage = Math.min(pkPageCount - 1, pkPage + 1)" :disabled="pkPage >= pkPageCount - 1">Next →</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" v-if="pkPendingCount">
+          <div class="row" style="justify-content:space-between;">
+            <h2 style="margin:0;">Pending changes <span class="muted" style="font-size:13px;font-weight:400;">— {{ pkDiff.adds.length }} add · {{ pkDiff.updates.length }} update · {{ pkDiff.deletes.length }} delete</span></h2>
+            <div class="row">
+              <button class="btn good" @click="pkShipPending">▶ Ship to portal ({{ pkPendingCount }} variants)</button>
+              <button class="btn alt sm" @click="pkMarkSynced" title="Promote working set to baseline">✓ Mark synced</button>
+            </div>
+          </div>
+          <div v-if="pkDiff.deletes.length" style="margin-top:12px;">
+            <h3>Deletes</h3>
+            <table>
+              <thead><tr><th>RL Type</th><th>NAME</th><th class="num">AMOUNT</th></tr></thead>
+              <tbody>
+                <tr v-for="d in pkDiff.deletes" :key="d.NAME + d.RATE_LIST_TYPE">
+                  <td><span class="badge rl">{{ d.RATE_LIST_TYPE }}</span></td>
+                  <td>{{ d.NAME }}</td>
+                  <td class="num">{{ Number(d.AMOUNT).toLocaleString() }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="pkDiff.updates.length" style="margin-top:12px;">
+            <h3>Updates (component-level changes)</h3>
+            <table>
+              <thead><tr><th>RL Type</th><th>NAME</th><th class="num">Components</th></tr></thead>
+              <tbody>
+                <tr v-for="u in pkDiff.updates" :key="u.NAME + u.RATE_LIST_TYPE">
+                  <td><span class="badge rl">{{ u.RATE_LIST_TYPE }}</span></td>
+                  <td>{{ u.NAME }}</td>
+                  <td class="num">{{ (u.COMPONENTS || []).length }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ============================================================ -->
     <!--  PENDING TAB                                                  -->
     <!-- ============================================================ -->
     <section v-if="tab==='pending'">
@@ -507,6 +629,12 @@
               <span class="muted" style="margin-left:8px;font-size:12px;">{{ new Date(j.createdAt).toLocaleString() }}</span>
             </div>
             <div class="row">
+              <button v-if="j._packages && j._packages.length" class="btn good sm"
+                      @click="syncJobToMirror(j)"
+                      :disabled="!!j._mirroredAt"
+                      :title="j._mirroredAt ? 'Already mirrored at ' + new Date(j._mirroredAt).toLocaleString() : 'Add these packages to the Package Master mirror'">
+                {{ j._mirroredAt ? '✓ Mirrored' : '↳ Sync to mirror' }}
+              </button>
               <button class="btn alt sm" @click="copyJobJson(j)">Copy JSON</button>
               <button class="btn danger sm" @click="deleteJob(j.id)">Delete</button>
             </div>
@@ -514,6 +642,7 @@
           <div class="muted" style="font-size:12px; margin-top:6px;">
             {{ j.rowCount }} package{{ j.rowCount===1?'':'s' }} · {{ j.itemCount }} portal item{{ j.itemCount===1?'':'s' }}
             <span v-if="j.note"> · "{{ j.note }}"</span>
+            <span v-if="j._mirroredAt"> · ↳ mirrored {{ new Date(j._mirroredAt).toLocaleString() }}</span>
           </div>
         </div>
       </div>
@@ -526,6 +655,7 @@
 <script src="templates.js"></script>
 <script src="compute.js"></script>
 <script src="ratelist.js"></script>
+<script src="packagemaster.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

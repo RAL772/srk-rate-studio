@@ -165,6 +165,119 @@ createApp({
       reloadRl();
     }
 
+    // ---------- Package Master state ----------
+    const pkImported = ref(SRKPackageMaster.isImported());
+    const pkWorking  = ref(SRKPackageMaster.loadWorking());
+    const pkFilterType = ref('');
+    const pkSearch = ref('');
+    const pkPage = ref(0);
+    const pkPageSize = 50;
+    const pkExpandedKey = ref(null);  // which row's components are shown
+    const pkVersion = ref(0);
+    const bumpPk = () => { pkVersion.value++; };
+    function reloadPk() { pkWorking.value = SRKPackageMaster.loadWorking(); bumpPk(); }
+
+    async function pkImportFromRepo() {
+      if (pkImported.value && !confirm('Re-importing will discard pending edits. Continue?')) return;
+      try {
+        const snap = await SRKPackageMaster.fetchSnapshot();
+        SRKPackageMaster.importSnapshot(snap);
+        pkImported.value = true;
+        reloadPk();
+        alert(`Imported ${(snap.rows || []).length} package variants.`);
+      } catch (e) { alert('Import failed: ' + e.message); }
+    }
+    function pkImportFromFile(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        try {
+          const snap = JSON.parse(r.result);
+          SRKPackageMaster.importSnapshot(snap);
+          pkImported.value = true;
+          reloadPk();
+          alert(`Imported ${(snap.rows || []).length} package variants.`);
+        } catch (e) { alert('Bad JSON: ' + e.message); }
+      };
+      r.readAsText(f);
+    }
+
+    const pkTypes = computed(() => SRKPackageMaster.rateListTypes());
+    const pkAllRows = computed(() => pkWorking.value.rows || []);
+    const pkFiltered = computed(() => {
+      const s = pkSearch.value.trim().toLowerCase();
+      const t = pkFilterType.value;
+      return pkAllRows.value.filter(r => {
+        if (t && r.RATE_LIST_TYPE !== t) return false;
+        if (s && !((r.NAME || '').toLowerCase().includes(s))) return false;
+        return true;
+      });
+    });
+    const pkPageRows = computed(() => {
+      const start = pkPage.value * pkPageSize;
+      return pkFiltered.value.slice(start, start + pkPageSize);
+    });
+    const pkPageCount = computed(() => Math.max(1, Math.ceil(pkFiltered.value.length / pkPageSize)));
+
+    function pkToggleExpand(row) {
+      const k = row.NAME + '|' + row.RATE_LIST_TYPE;
+      pkExpandedKey.value = (pkExpandedKey.value === k) ? null : k;
+    }
+    function pkIsExpanded(row) {
+      return pkExpandedKey.value === (row.NAME + '|' + row.RATE_LIST_TYPE);
+    }
+    function pkDeleteRow(row) {
+      if (!confirm(`Mark "${row.NAME}" (${row.RATE_LIST_TYPE}) for deletion?`)) return;
+      const idx = pkWorking.value.rows.findIndex(r => r === row);
+      if (idx < 0) return;
+      SRKPackageMaster.deleteRow(idx);
+      reloadPk();
+    }
+    function pkEditComponent(row, comp, field, value) {
+      const rowIdx = pkWorking.value.rows.findIndex(r => r === row);
+      const compIdx = (row.COMPONENTS || []).findIndex(c => c === comp);
+      if (rowIdx < 0 || compIdx < 0) return;
+      const patch = { [field]: field === 'Rate' ? Number(value) : value };
+      SRKPackageMaster.updateComponent(rowIdx, compIdx, patch);
+      Object.assign(row.COMPONENTS[compIdx], patch);
+      bumpPk();
+    }
+    const pkDiff = computed(() => {
+      void pkVersion.value;
+      void pkWorking.value.rows;
+      return SRKPackageMaster.diff();
+    });
+    const pkPendingCount = computed(() => {
+      const d = pkDiff.value;
+      return d.adds.length + d.updates.length + d.deletes.length;
+    });
+
+    function pkShipPending() {
+      const d = pkDiff.value;
+      const items = SRKPackageMaster.buildJobItems(d);
+      if (!items.length) { alert('No pending changes.'); return; }
+      const job = {
+        id: 'pkjob_' + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
+        createdAt: new Date().toISOString(),
+        templateName: 'Package Master sync',
+        action: 'mixed',
+        rowCount: d.adds.length + d.updates.length + d.deletes.length,
+        itemCount: items.length,
+        note: `${d.adds.length} add, ${d.updates.length} update, ${d.deletes.length} delete`,
+        items,
+      };
+      pending.value.unshift(job);
+      window.postMessage({ srkStudio: true, kind: 'jobShipped', job }, '*');
+      tab.value = 'pending';
+      alert(`Shipped Package sync: ${items.length} items. After completion, click "Mark synced".`);
+    }
+    function pkMarkSynced() {
+      if (!confirm('Promote current edits to baseline?')) return;
+      SRKPackageMaster.markSynced();
+      reloadPk();
+    }
+
     // Bridge live status (set by the mega-script via window.postMessage handshake)
     const bridgeLive = ref(false);
     let bridgePingTimer = 0;
@@ -318,13 +431,54 @@ createApp({
         itemCount: items.length,
         note: jobNote.value,
         items,
+        // Carry the per-package data so we can inject into the mirror later.
+        _packages: action.value !== 'delete' ? buildShippedPackages() : null,
       };
       pending.value.unshift(job);
       jobNote.value = '';
-      // Notify any listening bridge in the page (mega-script will postMessage back if it's there).
       window.postMessage({ srkStudio: true, kind: 'jobShipped', job }, '*');
       tab.value = 'pending';
-      alert(`Shipped job with ${items.length} item(s). Switch to your SRK tab — the mega-script should pick it up.`);
+      alert(`Shipped job with ${items.length} item(s). Switch to your SRK tab — the mega-script should pick it up.\n\nOnce the job runs successfully on the portal, come back here and click "Sync to mirror" on the job to add these packages to the Package Master mirror.`);
+    }
+
+    // Build a structured per-package list from the current Build Job state, so it can be
+    // injected into the Package Master mirror after a successful sync.
+    function buildShippedPackages() {
+      const tpl = jobTemplate.value;
+      if (!tpl || tpl.master !== 'package') return null;
+      const pkgs = [];
+      for (const r of computedRows.value) {
+        if (!r.ok) continue;
+        const rateListType = (tpl.rateListType === '*' || !tpl.rateListType)
+          ? (r.scope.rateListType || '')
+          : tpl.rateListType;
+        pkgs.push({
+          packageName: r.scope.packageName,
+          packageType: tpl.packageType || 'IPD',
+          rateListType,
+          components: r.components.map(c => ({ NAME: c.Component, Rate: c.Rate })),
+          amount: r.components.reduce((s, c) => s + Number(c.Rate || 0), 0),
+        });
+      }
+      return pkgs;
+    }
+
+    // Called from Pending Jobs panel — injects this job's packages into the Package mirror.
+    function syncJobToMirror(job) {
+      if (!job._packages || !job._packages.length) {
+        alert('This job has no per-package data (delete jobs or Rate List jobs are not auto-injectable to the Package mirror).');
+        return;
+      }
+      let injected = 0;
+      for (const p of job._packages) {
+        if (SRKPackageMaster.injectVariant(p)) injected++;
+      }
+      job._mirroredAt = new Date().toISOString();
+      // Persist updated job back to pending storage.
+      const idx = pending.value.findIndex(j => j.id === job.id);
+      if (idx >= 0) pending.value[idx] = { ...job };
+      reloadPk();
+      alert(`Injected ${injected} package variant(s) into the Package Master mirror.`);
     }
 
     // ---------- Pending tab actions ----------
@@ -378,7 +532,7 @@ createApp({
       jobTemplateId, jobTemplate, csvText, action,
       computedRows, okCount, errCount, computeAll,
       downloadCsvTemplate, loadCsvFile, ship, jobNote,
-      pending, deleteJob, clearAllPending, copyJobJson,
+      pending, deleteJob, clearAllPending, copyJobJson, syncJobToMirror,
       bridgeLive, pingBridge,
       // Rate List
       rlImported, rlWorking, rlFilterType, rlSearch, rlPage, rlPageSize,
@@ -387,6 +541,12 @@ createApp({
       rlEditCell, rlDeleteRow,
       rlNewRow, rlBeginAdd, rlCancelAdd, rlConfirmAdd,
       rlDiff, rlPendingCount, rlShipPending, rlMarkSynced, rlSyncBusy,
+      // Package Master
+      pkImported, pkWorking, pkFilterType, pkSearch, pkPage, pkPageSize,
+      pkAllRows, pkFiltered, pkPageRows, pkPageCount, pkTypes,
+      pkImportFromRepo, pkImportFromFile,
+      pkToggleExpand, pkIsExpanded, pkDeleteRow, pkEditComponent,
+      pkDiff, pkPendingCount, pkShipPending, pkMarkSynced,
     };
   },
 }).mount('#app');
