@@ -278,6 +278,82 @@ createApp({
       reloadPk();
     }
 
+    // ---------- Lens Register state ----------
+    const lensImported = ref(SRKLensRegister.isImported());
+    const lensRows = ref(SRKLensRegister.loadRows());
+    const lensVersion = ref(0);
+    const bumpLens = () => { lensVersion.value++; };
+    const lensSearch = ref('');
+    const lensVendor = ref('');
+    const lensYellowOnly = ref(false);
+    const lensPage = ref(0);
+    const lensPageSize = 50;
+
+    async function lensImportFromFile(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      try {
+        const buf = await f.arrayBuffer();
+        const rows = await SRKLensRegister.importFromArrayBuffer(buf);
+        SRKLensRegister.importRows(rows);
+        lensRows.value = rows;
+        lensImported.value = true;
+        bumpLens();
+        alert(`Imported ${rows.length} lenses (${rows.filter(r => r.yellow).length} yellow / not-yet-added).`);
+      } catch (e) { alert('Import failed: ' + e.message); }
+    }
+
+    function lensEditCell(row, field, value) {
+      const idx = lensRows.value.findIndex(r => r === row);
+      if (idx < 0) return;
+      const patch = { [field]: ['mrp','newMrp','lensHospital','lensOthers','cost','pkgHospital'].includes(field) ? Number(value) : value };
+      SRKLensRegister.updateRow(idx, patch);
+      Object.assign(row, patch);
+      bumpLens();
+    }
+
+    const lensVendors = computed(() => {
+      void lensVersion.value;
+      const set = new Set();
+      for (const r of lensRows.value) if (r.vendor) set.add(r.vendor);
+      return Array.from(set).sort();
+    });
+    const lensFiltered = computed(() => {
+      void lensVersion.value;
+      const s = lensSearch.value.trim().toLowerCase();
+      const v = lensVendor.value;
+      return lensRows.value.filter(r => {
+        if (v && r.vendor !== v) return false;
+        if (lensYellowOnly.value && !r.yellow) return false;
+        if (s && !((r.nameExcel || '').toLowerCase().includes(s) || (r.vendor || '').toLowerCase().includes(s))) return false;
+        return true;
+      });
+    });
+    const lensPageRows = computed(() => {
+      const start = lensPage.value * lensPageSize;
+      return lensFiltered.value.slice(start, start + lensPageSize);
+    });
+    const lensPageCount = computed(() => Math.max(1, Math.ceil(lensFiltered.value.length / lensPageSize)));
+    const lensYellowCount = computed(() => {
+      void lensVersion.value;
+      return lensRows.value.filter(r => r.yellow).length;
+    });
+    const lensReadyCount = computed(() => {
+      void lensVersion.value;
+      return lensRows.value.filter(r => SRKLensRegister.readiness(r).ready).length;
+    });
+
+    function lensRowReadiness(row) {
+      void lensVersion.value;
+      return SRKLensRegister.readiness(row);
+    }
+    function lensRowPortalMatches(row) {
+      void lensVersion.value;
+      const map = SRKLensRegister.findPortalPackages(row);
+      // Return summary like "HOSPITAL ✓, TPA(2) ✓, STAR TPA ✓, MISSING: PMJAY"
+      return map;
+    }
+
     // Bridge live status (set by the mega-script via window.postMessage handshake)
     const bridgeLive = ref(false);
     let bridgePingTimer = 0;
@@ -547,6 +623,11 @@ createApp({
       pkImportFromRepo, pkImportFromFile,
       pkToggleExpand, pkIsExpanded, pkDeleteRow, pkEditComponent,
       pkDiff, pkPendingCount, pkShipPending, pkMarkSynced,
+      // Lens Register
+      lensImported, lensRows, lensSearch, lensVendor, lensYellowOnly, lensPage, lensPageSize,
+      lensVendors, lensFiltered, lensPageRows, lensPageCount,
+      lensYellowCount, lensReadyCount,
+      lensImportFromFile, lensEditCell, lensRowReadiness, lensRowPortalMatches,
     };
   },
 }).mount('#app');

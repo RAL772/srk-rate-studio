@@ -15,6 +15,7 @@
       <button :class="{active: tab==='build'}"     @click="tab='build'">Build Job</button>
       <button :class="{active: tab==='ratelist'}"  @click="tab='ratelist'">Rate List <span v-if="rlPendingCount" class="badge">{{ rlPendingCount }}</span></button>
       <button :class="{active: tab==='packages'}"  @click="tab='packages'">Packages <span v-if="pkPendingCount" class="badge">{{ pkPendingCount }}</span></button>
+      <button :class="{active: tab==='lenses'}"    @click="tab='lenses'">Lens Register <span v-if="lensYellowCount" class="badge">{{ lensYellowCount }} new</span></button>
       <button :class="{active: tab==='pending'}"   @click="tab='pending'">Pending Jobs <span v-if="pending.length" class="badge">{{ pending.length }}</span></button>
     </div>
     <div class="spacer"></div>
@@ -612,6 +613,108 @@
     </section>
 
     <!-- ============================================================ -->
+    <!--  LENS REGISTER TAB                                            -->
+    <!-- ============================================================ -->
+    <section v-if="tab==='lenses'">
+      <div v-if="!lensImported" class="panel">
+        <h2 style="margin-top:0;">Import Lens Register</h2>
+        <p class="muted">Upload your "IOL Package name comparsion .xlsx" — the script reads vendor, lens name, MRP, New MRP, lens charges (HOSPITAL / Others), Cost, package amount HOSPITAL, and detects yellow-highlighted rows (lenses not yet added on the portal).</p>
+        <label class="btn good" style="cursor:pointer;display:inline-block;">Upload .xlsx
+          <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="lensImportFromFile" style="display:none;" />
+        </label>
+      </div>
+
+      <template v-else>
+        <div class="panel">
+          <div class="row" style="justify-content:space-between;">
+            <h2 style="margin:0;">Lens Register
+              <span class="muted" style="font-size:13px;font-weight:400;">— {{ lensRows.length }} lenses · {{ lensYellowCount }} not-added · {{ lensReadyCount }} ready to sync</span>
+            </h2>
+            <div class="row">
+              <label class="btn alt sm" style="cursor:pointer;">↻ Re-import
+                <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="lensImportFromFile" style="display:none;" />
+              </label>
+            </div>
+          </div>
+          <div class="help" style="margin-top:8px;">
+            <strong>Phase 1:</strong> view + edit imported data, see which rate list types each lens is missing on the portal.
+            <strong>Phase 2 (next):</strong> click "Generate sync plan" to create Add/Update/Delete ops automatically by applying the rules
+            (HOSPITAL: Cataract Standard with lens=Lens Charge HOSPITAL + Total=pkgHospital; TPA/STAR TPA/PMJAY: lens=Lens Charge Others; CGHS lists / PMJAY CHARITY / DVA: Rate List Master row with MRP-5800; old/new MRP → both versions; Nishic/Alcon HOSPITAL → use cost).
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="field" style="flex:1;"><span>Search (lens name or vendor)</span>
+              <input type="text" v-model="lensSearch" @input="lensPage = 0" placeholder="ALCON, Acriol..." />
+            </label>
+            <label class="field" style="flex:0 0 200px;"><span>Vendor</span>
+              <select v-model="lensVendor" @change="lensPage = 0">
+                <option value="">All vendors</option>
+                <option v-for="v in lensVendors" :key="v" :value="v">{{ v }}</option>
+              </select>
+            </label>
+            <label class="field" style="flex:0 0 140px;"><span>Filter</span>
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:6px;">
+                <input type="checkbox" v-model="lensYellowOnly" @change="lensPage = 0" />
+                Yellow only ({{ lensYellowCount }})
+              </label>
+            </label>
+          </div>
+
+          <table style="margin-top:12px;">
+            <thead>
+              <tr>
+                <th style="width:24px"></th>
+                <th>Vendor</th>
+                <th>Lens Name (Excel)</th>
+                <th class="num">MRP</th>
+                <th class="num">New MRP</th>
+                <th class="num">Lens HOSP</th>
+                <th class="num">Lens Others</th>
+                <th class="num">Cost</th>
+                <th class="num">Pkg HOSP</th>
+                <th>Portal status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in lensPageRows" :key="r.nameExcel + '-' + r.sr" :class="{error: !lensRowReadiness(r).ready, ok: lensRowReadiness(r).ready}">
+                <td class="first" :title="lensRowReadiness(r).reasons.join('; ') || 'ready'">
+                  <span v-if="r.yellow" style="color:#fbbf24;font-size:14px;" title="Yellow in source — not yet added on portal">★</span>
+                  <span v-else-if="lensRowReadiness(r).ready" style="color:#2ec27e;">✓</span>
+                  <span v-else style="color:#ef4444;">!</span>
+                </td>
+                <td><span class="muted" style="font-size:11px;">{{ r.vendor }}</span></td>
+                <td>{{ r.nameExcel }}</td>
+                <td class="num"><input type="number" :value="r.mrp" @change="lensEditCell(r, 'mrp', $event.target.value)" style="width:80px;background:transparent;border:1px solid transparent;padding:2px 4px;text-align:right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td class="num"><input type="number" :value="r.newMrp" @change="lensEditCell(r, 'newMrp', $event.target.value)" style="width:80px;background:transparent;border:1px solid transparent;padding:2px 4px;text-align:right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td class="num"><input type="number" :value="r.lensHospital" @change="lensEditCell(r, 'lensHospital', $event.target.value)" style="width:80px;background:transparent;border:1px solid transparent;padding:2px 4px;text-align:right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td class="num"><input type="number" :value="r.lensOthers" @change="lensEditCell(r, 'lensOthers', $event.target.value)" style="width:80px;background:transparent;border:1px solid transparent;padding:2px 4px;text-align:right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td class="num"><input type="number" :value="r.cost" @change="lensEditCell(r, 'cost', $event.target.value)" style="width:80px;background:transparent;border:1px solid transparent;padding:2px 4px;text-align:right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td class="num"><input type="number" :value="r.pkgHospital" @change="lensEditCell(r, 'pkgHospital', $event.target.value)" style="width:90px;background:transparent;border:1px solid transparent;padding:2px 4px;text-align:right;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='transparent'" /></td>
+                <td style="font-size:11px;">
+                  <template v-for="(arr, rl) in lensRowPortalMatches(r)" :key="rl">
+                    <span class="badge rl" style="margin-right:3px;" :title="arr.map(p => p.NAME).join(', ')">{{ rl }}{{ arr.length > 1 ? '×'+arr.length : '' }}</span>
+                  </template>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="row" style="margin-top:12px;justify-content:space-between;">
+            <span class="muted">Page {{ lensPage + 1 }} / {{ lensPageCount }}</span>
+            <div class="row">
+              <button class="btn alt sm" @click="lensPage = Math.max(0, lensPage - 1)" :disabled="lensPage === 0">← Prev</button>
+              <button class="btn alt sm" @click="lensPage = Math.min(lensPageCount - 1, lensPage + 1)" :disabled="lensPage >= lensPageCount - 1">Next →</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3 style="margin-top:0;">Phase 2 — coming next</h3>
+          <p class="muted">The "Generate sync plan" button will go here. It will apply the rules to every ready lens, produce Add/Update/Delete operations for the Package Master + Rate List Master mirrors, and let you preview the plan before shipping. ACRIOL will get an exception clause for its Phaco=2500.</p>
+        </div>
+      </template>
+    </section>
+
+    <!-- ============================================================ -->
     <!--  PENDING TAB                                                  -->
     <!-- ============================================================ -->
     <section v-if="tab==='pending'">
@@ -652,10 +755,12 @@
 </div>
 
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="templates.js"></script>
 <script src="compute.js"></script>
 <script src="ratelist.js"></script>
 <script src="packagemaster.js"></script>
+<script src="lensregister.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
