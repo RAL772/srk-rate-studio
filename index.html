@@ -511,6 +511,10 @@
           <div class="row" style="justify-content:space-between;">
             <h2 style="margin:0;">Package Master <span class="muted" style="font-size:13px;font-weight:400;">— {{ pkAllRows.length }} variants ({{ pkFiltered.length }} match filter)</span></h2>
             <div class="row">
+              <button class="btn danger sm" @click="pkDeleteAllFiltered" :disabled="!pkFiltered.length"
+                      :title="'Mark all ' + pkFiltered.length + ' filtered variant(s) for deletion'">
+                ⌫ Delete all filtered ({{ pkFiltered.length }})
+              </button>
               <button class="btn alt sm" @click="pkImportFromRepo" title="Re-import from repo">↻ Re-import</button>
             </div>
           </div>

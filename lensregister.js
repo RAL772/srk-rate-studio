@@ -130,19 +130,64 @@
     return { ready: reasons.length === 0, reasons };
   }
 
+  // Common vendor prefix tokens to strip when comparing names.
+  // Order matters — multi-word prefixes first.
+  const VENDOR_PREFIXES = [
+    'j & j tecnis', 'j&j tecnis', 'jj tecnis', 'tecnis',
+    'b & l', 'b&l', 'bvi', 'iocare', 'biotech', 'alcon', 'acrysof',
+    'zeiss', 'carl zeiss', 'hoya', 'rayner', 'rayone',
+    'appasamy', 'appaswamy', 'oculentis', 'lentis',
+    'staar', 'naspro', 'eyecryl', 'envista', 'isopure',
+    'micropure', 'miniwell', 'luxsmart', 'optiflex',
+  ];
+
+  // Build a normalized key for fuzzy lens-name matching.
+  function normalizeName(name) {
+    if (!name) return '';
+    let s = String(name).toLowerCase().trim();
+    // Strip parenthetical suffixes "(GB,MK,MU)", "(Toric)", "(old)", etc.
+    s = s.replace(/\s*\([^)]+\)\s*$/g, '').trim();
+    // Collapse whitespace and unify punctuation.
+    s = s.replace(/[.,]/g, ' ').replace(/&/g, ' & ').replace(/\s+/g, ' ').trim();
+    return s;
+  }
+  function stripVendorPrefix(name) {
+    const norm = normalizeName(name);
+    for (const p of VENDOR_PREFIXES) {
+      if (norm.startsWith(p + ' ')) return norm.slice(p.length + 1).trim();
+      if (norm === p) return '';
+    }
+    // Also try stripping just the first word (catches uncommon vendor prefixes).
+    const first = norm.split(' ')[0];
+    if (first && first.length >= 4) {
+      // Only strip if the rest still has meaningful content (>1 word OR >3 chars).
+      const rest = norm.slice(first.length).trim();
+      if (rest && (rest.includes(' ') || rest.length > 3)) return rest;
+    }
+    return norm;
+  }
+
+  // Generate candidate keys for matching — original normalized + vendor-stripped.
+  function nameKeys(name) {
+    const a = normalizeName(name);
+    const b = stripVendorPrefix(a);
+    const set = new Set([a]);
+    if (b && b !== a) set.add(b);
+    return Array.from(set);
+  }
+
   // Find existing portal packages that correspond to this lens.
-  // Returns an object keyed by rate list type with the matching package row from the mirror.
+  // Returns an object keyed by rate list type with the matching package rows from the mirror.
   function findPortalPackages(row) {
     if (!global.SRKPackageMaster) return {};
     const all = (global.SRKPackageMaster.loadWorking().rows || []);
-    const target = row.nameExcel.trim().toLowerCase();
+    const lensKeys = nameKeys(row.nameExcel);
     const out = {};
     for (const p of all) {
-      // Match by name OR name + suffix variants — for now exact match on canonical name.
-      const pname = (p.NAME || '').trim().toLowerCase();
-      // Strip "(GB,MK,MU)" / "(VA,SW,CH)" / " (old)" suffixes for comparison.
-      const stripped = pname.replace(/\s*\([^)]+\)\s*$/, '').trim();
-      if (pname === target || stripped === target) {
+      const portalKeys = nameKeys(p.NAME);
+      // Match if any lens key equals any portal key.
+      const hit = lensKeys.some(lk => portalKeys.some(pk => lk === pk));
+      if (hit) {
         if (!out[p.RATE_LIST_TYPE]) out[p.RATE_LIST_TYPE] = [];
         out[p.RATE_LIST_TYPE].push(p);
       }
