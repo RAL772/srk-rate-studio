@@ -183,11 +183,15 @@
           : template.rateListType;
         const fields = {};
         for (const c of r.components) fields[String(c.Component).toLowerCase()] = c.Rate;
-        const code     = String(fields.code || r.scope.code || '');
-        const name     = String(fields.name || r.scope.name || '');
-        const category = String(fields.category   || '');
-        const dept     = String(fields.department || '');
-        const amount   = Number(fields.amount || 0);
+        // Fall back to scope (the raw input row) when a field isn't produced by
+        // a fixed/formula entry. This lets a template be defined with just inputs
+        // (no formulas) and still pass values through to the rate-list row.
+        const pick = (key) => fields[key] != null ? fields[key] : r.scope[key];
+        const code     = String(pick('code')       || '');
+        const name     = String(pick('name')       || '');
+        const category = String(pick('category')   || '');
+        const dept     = String(pick('department') || '');
+        const amount   = Number(pick('amount') != null ? pick('amount') : 0);
 
         if (action === 'delete') {
           items.push({
