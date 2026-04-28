@@ -227,6 +227,80 @@
       validate: 'total > 0',
       validateMsg: 'Total must be greater than 0.',
     },
+
+    // ===== RATE LIST MASTER TEMPLATES =====
+    // For master='rateList', the template emits a single rate-list row per CSV input.
+    // "fixed" and "formulas" describe field assignments (component name = field key,
+    // rate = field value). Recognized fields: category, department, name, amount.
+    // The TYPE field on the SRK form equals the rate list type.
+
+    {
+      id: 'lens-cghs-rl',
+      name: 'Lens for CGHS Rate List (MRP − 5800)',
+      master: 'rateList',
+      rateListType: '*',  // user picks per row
+      inputs: [
+        { key: 'rateListType', label: 'Rate List Type', type: 'select', required: true,
+          options: ['CGHS GENERAL', 'CGHS PRIVATE', 'CGHS SEMI PRIVATE'] },
+        { key: 'lensName',     label: 'Lens Name',     type: 'text',   required: true },
+        { key: 'mrp',          label: 'MRP',           type: 'number', required: true },
+      ],
+      fixed: [
+        { component: 'category',   rate: 'SURGERY' },
+        { component: 'department', rate: 'CATARACT' },
+      ],
+      formulas: [
+        { component: 'name',   expr: 'lensName' },
+        { component: 'amount', expr: 'mrp - 5800' },
+      ],
+      validate: 'mrp > 5800',
+      validateMsg: 'MRP must be greater than 5800.',
+    },
+
+    {
+      id: 'rl-generic',
+      name: 'Generic Rate (any category)',
+      master: 'rateList',
+      rateListType: '*',
+      inputs: [
+        { key: 'rateListType', label: 'Rate List Type', type: 'text',   required: true },
+        { key: 'category',     label: 'Category',       type: 'text',   required: true },
+        { key: 'department',   label: 'Department',     type: 'text',   required: true },
+        { key: 'name',         label: 'Name',           type: 'text',   required: true },
+        { key: 'amount',       label: 'Amount',         type: 'number', required: true },
+      ],
+      fixed: [],
+      formulas: [
+        { component: 'category',   expr: 'category' },
+        { component: 'department', expr: 'department' },
+        { component: 'name',       expr: 'name' },
+        { component: 'amount',     expr: 'amount' },
+      ],
+      validate: 'amount >= 0',
+      validateMsg: 'Amount must be non-negative.',
+    },
+
+    {
+      id: 'rl-consultation',
+      name: 'Consultation Rate',
+      master: 'rateList',
+      rateListType: '*',
+      inputs: [
+        { key: 'rateListType', label: 'Rate List Type', type: 'text',   required: true },
+        { key: 'name',         label: 'Doctor / Service Name', type: 'text', required: true },
+        { key: 'amount',       label: 'Amount',         type: 'number', required: true },
+      ],
+      fixed: [
+        { component: 'category',   rate: 'CONSULTATION' },
+        { component: 'department', rate: 'CONSULTATION' },
+      ],
+      formulas: [
+        { component: 'name',   expr: 'name' },
+        { component: 'amount', expr: 'amount' },
+      ],
+      validate: 'amount >= 0',
+      validateMsg: 'Amount must be non-negative.',
+    },
   ];
 
   function loadAll() {

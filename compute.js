@@ -71,9 +71,12 @@
     }
 
     // Build component list: fixed first, then formulas, then extras.
+    // Non-numeric values are preserved as-is (used by rate-list templates whose
+    // "components" describe field assignments like {Component:'category',Rate:'SURGERY'}).
     const components = [];
     for (const f of (template.fixed || [])) {
-      components.push({ Component: f.component, Rate: round(f.rate) });
+      const v = f.rate;
+      components.push({ Component: f.component, Rate: typeof v === 'number' ? round(v) : v });
     }
     for (const f of (template.formulas || [])) {
       let v;
@@ -81,7 +84,7 @@
       catch (e) { return fail(e.message); }
       if (typeof v === 'number' && !isFinite(v)) return fail(`Formula "${f.component}" produced non-finite value`);
       const compName = (f.component === '__PACKAGE_NAME__') ? scope.packageName : f.component;
-      components.push({ Component: compName, Rate: round(v) });
+      components.push({ Component: compName, Rate: typeof v === 'number' ? round(v) : v });
     }
     // Optional "extras" — appear only when a flag input is truthy.
     for (const ex of (template.extras || [])) {
@@ -166,9 +169,63 @@
   // produce the per-master flat-row payload that the mega-script expects.
   function buildJobItems(template, computedRows, action) {
     const items = [];
+
+    // ----- Rate List Master templates -----
+    // For these, the "components" array is repurposed as field assignments —
+    // e.g. {Component:'category', Rate:'SURGERY'}, {Component:'amount', Rate: 27200}.
+    if (template.master === 'rateList') {
+      let rowIdx = 0;
+      for (const r of computedRows) {
+        rowIdx++;
+        if (!r.ok) continue;
+        const rlt = (template.rateListType === '*' || !template.rateListType)
+          ? (r.scope.rateListType || '')
+          : template.rateListType;
+        const fields = {};
+        for (const c of r.components) fields[String(c.Component).toLowerCase()] = c.Rate;
+        const code     = String(fields.code || r.scope.code || '');
+        const name     = String(fields.name || r.scope.name || '');
+        const category = String(fields.category   || '');
+        const dept     = String(fields.department || '');
+        const amount   = Number(fields.amount || 0);
+
+        if (action === 'delete') {
+          items.push({
+            master: 'rateList', action: 'delete',
+            code, name, rateListType: rlt,
+            _key: `rl_del_${rowIdx}_${Math.random().toString(36).slice(2,6)}`,
+          });
+          continue;
+        }
+        if (action === 'update') {
+          items.push({
+            master: 'rateList', action: 'update',
+            code, name, rateListType: rlt,
+            newName:   name,
+            newAmount: amount,
+            _key: `rl_upd_${rowIdx}_${Math.random().toString(36).slice(2,6)}`,
+          });
+          continue;
+        }
+        // add
+        items.push({
+          master: 'rateList', action: 'add',
+          code,
+          category,
+          type: rlt,
+          department: dept,
+          name,
+          amount,
+          rateListType: rlt,
+          _key: `rl_add_${rowIdx}_${Math.random().toString(36).slice(2,6)}`,
+        });
+      }
+      return items;
+    }
+
+    // ----- Package Master templates (existing) -----
     for (const r of computedRows) {
       if (!r.ok) continue;
-      // Effective rate list type: template's, OR scope override (template 9 lets user pick per row).
       const rlt = (template.rateListType === '*' || !template.rateListType)
         ? (r.scope.rateListType || '')
         : template.rateListType;
@@ -176,10 +233,9 @@
       const pkgType = template.packageType || 'IPD';
 
       if (action === 'delete') {
-        items.push({ master: 'package', action: 'delete', packageName: pkgName });
+        items.push({ master: 'package', action: 'delete', packageName: pkgName, rateListType: rlt });
         continue;
       }
-      // Add or Update — emit one item per component (mega-script groups by name).
       for (const c of r.components) {
         items.push({
           master: 'package',
