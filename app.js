@@ -234,6 +234,27 @@ createApp({
       SRKPackageMaster.deleteRow(idx);
       reloadPk();
     }
+    // Bulk-delete every variant currently visible in the filter (filterType + search).
+    // The user's typical use case is wiping an entire rate list type.
+    function pkDeleteAllFiltered() {
+      const targets = pkFiltered.value.slice();  // snapshot before mutating
+      if (!targets.length) { alert('No rows match the current filter.'); return; }
+      const breakdown = {};
+      for (const r of targets) breakdown[r.RATE_LIST_TYPE] = (breakdown[r.RATE_LIST_TYPE] || 0) + 1;
+      const summary = Object.entries(breakdown).map(([k, v]) => `  • ${k}: ${v}`).join('\n');
+      const filterDesc = (pkFilterType.value || 'ALL') + (pkSearch.value ? ` matching "${pkSearch.value}"` : '');
+      if (!confirm(`Mark ALL ${targets.length} package variant${targets.length === 1 ? '' : 's'} (${filterDesc}) for deletion?\n\n${summary}\n\nThis only marks them in the Studio mirror. Click "▶ Ship to portal" to actually delete on srk.rxhis.com.`)) return;
+      // Identify rows by reference, then delete from working set in reverse-index order so
+      // the indices we resolve don't drift as we splice.
+      const all = pkWorking.value.rows;
+      const idxs = targets
+        .map(r => all.indexOf(r))
+        .filter(i => i >= 0)
+        .sort((a, b) => b - a);
+      for (const i of idxs) SRKPackageMaster.deleteRow(i);
+      reloadPk();
+      alert(`${idxs.length} variant${idxs.length === 1 ? '' : 's'} marked for deletion. Open the Pending changes panel below to review and Ship.`);
+    }
     function pkEditComponent(row, comp, field, value) {
       const rowIdx = pkWorking.value.rows.findIndex(r => r === row);
       const compIdx = (row.COMPONENTS || []).findIndex(c => c === comp);
@@ -621,7 +642,7 @@ createApp({
       pkImported, pkWorking, pkFilterType, pkSearch, pkPage, pkPageSize,
       pkAllRows, pkFiltered, pkPageRows, pkPageCount, pkTypes,
       pkImportFromRepo, pkImportFromFile,
-      pkToggleExpand, pkIsExpanded, pkDeleteRow, pkEditComponent,
+      pkToggleExpand, pkIsExpanded, pkDeleteRow, pkDeleteAllFiltered, pkEditComponent,
       pkDiff, pkPendingCount, pkShipPending, pkMarkSynced,
       // Lens Register
       lensImported, lensRows, lensSearch, lensVendor, lensYellowOnly, lensPage, lensPageSize,
