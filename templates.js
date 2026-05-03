@@ -250,6 +250,27 @@
       validate: 'amount >= 0',
       validateMsg: 'Amount must be non-negative.',
     },
+
+    {
+      id: 'rl-delete',
+      name: 'Rate List Master Delete (use with Action=Delete)',
+      master: 'rateList',
+      rateListType: '*',
+      inputs: [
+        { key: 'rateListType', label: 'Rate List Type', type: 'select', required: true,
+          options: ['HOSPITAL', 'TPA', 'DVA', 'STAR TPA',
+                    'CGHS GENERAL', 'CGHS PRIVATE', 'CGHS SEMI PRIVATE',
+                    'PMJAY', 'PMJAY CHARITY'] },
+        { key: 'code',         label: 'CODE',           type: 'text',   required: true },
+      ],
+      fixed: [],
+      formulas: [
+        // Maps the input CODE into the field map buildJobItems reads from for delete actions.
+        { component: 'code', expr: 'code' },
+      ],
+      validate: 'code != ""',
+      validateMsg: 'CODE is required.',
+    },
   ];
 
   function loadAll() {
@@ -263,17 +284,19 @@
       return clone(DEFAULT_TEMPLATES);
     }
   }
-  // Strip deprecated rate-list templates and add the new single one if missing.
+  // Strip deprecated rate-list templates and ensure the standard rate-list ones exist.
   // Preserves any user-authored templates.
   function migrate(arr) {
     const deprecated = new Set(['lens-cghs-rl', 'rl-generic', 'rl-consultation']);
     let filtered = arr.filter(t => !deprecated.has(t.id));
-    const hasNew = filtered.some(t => t.id === 'rl-add');
-    if (!hasNew) {
-      const def = DEFAULT_TEMPLATES.find(t => t.id === 'rl-add');
-      if (def) filtered.push(clone(def));
+    let changed = filtered.length !== arr.length;
+    for (const id of ['rl-add', 'rl-delete']) {
+      if (!filtered.some(t => t.id === id)) {
+        const def = DEFAULT_TEMPLATES.find(t => t.id === id);
+        if (def) { filtered.push(clone(def)); changed = true; }
+      }
     }
-    if (filtered.length !== arr.length || !hasNew) {
+    if (changed) {
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered)); } catch (_) {}
     }
     return filtered;
